@@ -215,7 +215,11 @@ while True:
                     logger.info('would\'ve deleted member %s'%body['EC2InstanceId'])
                 else:
                     logger.info('deleting member %s'%body['EC2InstanceId'])
-                    etcdclient.deletemember(body['EC2InstanceId']) 
+                    try:
+		    	etcdclient.deletemember(body['EC2InstanceId'])
+		    except etcd.EtcdException as e:
+			logger.warning('error deleting memberi %s'%body['EC2InstanceId'])
+		
             elif body['LifecycleTransition'] == 'autoscaling:EC2_INSTANCE_LAUNCHING':
                 # sendmsg with peerURLs to queue for new member to configure themselves
                 logger.info('launch detected, sending peerlist to etcd queue')
