@@ -11,13 +11,16 @@ import boto3
 import sys
 
 parser = argparse.ArgumentParser()
-parser.add_argument('region', help = "region")
-parser.add_argument('asqueueurl', help = "URL of autoscaler queue")
-parser.add_argument('etcdqueueurl', help = "URL of etcd queue")
+parser.add_argument('region', help="region")
+parser.add_argument('asqueueurl', help="URL of autoscaler queue")
+parser.add_argument('etcdqueueurl', help="URL of etcd queue")
 parser.add_argument('-d', '--debug', action="store_true", help="enable debug logging")
-parser.add_argument('-n', '--dryrun', action="store_true", help="read-only operation: do not delete/modify anything")
-parser.add_argument('-i', '--initwaittime', type=int, default=120, help="number of seconds to wait on startup before assuming no leader exists")
-parser.add_argument('-w', '--waittime', type=int, default=15, help="number of seconds to wait between checking for change in leadership or queue messages")
+parser.add_argument('-n', '--dryrun', action="store_true", help="read-only operation: \
+        do not delete/modify anything")
+parser.add_argument('-i', '--initwaittime', type=int, default=120, help="number of \
+        seconds to wait on startup before assuming no leader exists")
+parser.add_argument('-w', '--waittime', type=int, default=15, help="number of seconds \
+        to wait between checking for change in leadership or queue messages")
 parser.add_argument('-f', '--etcdconfpath', default="/etc/systemd/system/etcd2.service.d/10-init.conf", help="directory to write etcd systemd unit override/conf to")
 args = parser.parse_args()
 
@@ -47,7 +50,7 @@ def _getsystemd():
     manager = dbus.Interface(systemd1, 'org.freedesktop.systemd1.Manager')
     return manager
 
-def writeetcdconf(path,initclusterstate,cluster):
+def writeetcdconf(path, initclusterstate, cluster):
     if initclusterstate:
         initclusterstate='existing'
     else:
@@ -75,7 +78,7 @@ def restartetcd():
         logger.debug('restarting etcd2')
         _getsystemd().RestartUnit('etcd2.service', 'replace')
 
-def getasmsg(queue,msgfilterfunc=lambda body: 'LifecycleTransition' in body):
+def getasmsg(queue, msgfilterfunc=lambda body: 'LifecycleTransition' in body):
 
     msg = getmsg(queue)
 
@@ -122,7 +125,7 @@ def getmsg(queue):
 
     return msg
 
-def putmsg(queue,msgbody):
+def putmsg(queue, msgbody):
     logger.debug('putting msg %s -> %s'%(msgbody,queue))
     queue.send_message(MessageBody=msgbody)
 
@@ -222,17 +225,26 @@ while True:
 		
             elif body['LifecycleTransition'] == 'autoscaling:EC2_INSTANCE_LAUNCHING':
                 # sendmsg with peerURLs to queue for new member to configure themselves
-                logger.info('launch detected, sending peerlist to etcd queue')
-                putmsg(etcdqueue,json.dumps({k:v['peerURLs'][0] for k,v in etcdclient.members.iteritems()}))
-
+                logger.detected('launch of %s detected'%body['EC2InstanceId'])
+                
                 # get new instance's ip from aws
                 ip = boto3.resource('ec2',region_name=args.region).Instance(body['EC2InstanceId']).private_ip_address
-                if args.dryrun:
-                    logger.info('would\'ve added new member %s to cluster'%ip)
+
+                if ip:
+                    logger.info('sending peerlist to etcd queue')
+                    putmsg(etcdqueue,json.dumps({k:v['peerURLs'][0] for k,v in etcdclient.members.iteritems()}))
+
+                    if args.dryrun:
+                        logger.info('would\'ve added new member %s to cluster'%ip)
+                    else:
+                        logger.info('adding new member %s to cluster'%ip)
+                        # add to cluster
+                        etcdclient.addmember("http://%s:2380"%ip)
                 else:
-                    logger.info('adding new member %s to cluster'%ip)
-                    # add to cluster
-                    etcdclient.addmember("http://%s:2380"%ip)
+                    logger.info('could not get ip for instance %s, ignoring'%body['EC2InstanceId'])
+            else:
+                logger.warning('unknown AS msg received')
+
             msg.delete()
 
     else:
