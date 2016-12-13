@@ -222,30 +222,35 @@ while True:
 		    	etcdclient.deletemember(body['EC2InstanceId'])
 		    except etcd.EtcdException as e:
 			logger.warning('error deleting memberi %s'%body['EC2InstanceId'])
-		
+                msg.delete()
             elif body['LifecycleTransition'] == 'autoscaling:EC2_INSTANCE_LAUNCHING':
                 # sendmsg with peerURLs to queue for new member to configure themselves
                 logger.info('launch of %s detected'%body['EC2InstanceId'])
-                
-                # get new instance's ip from aws
-                ip = boto3.resource('ec2',region_name=args.region).Instance(body['EC2InstanceId']).private_ip_address
 
-                if ip:
-                    logger.info('sending peerlist to etcd queue')
-                    putmsg(etcdqueue,json.dumps({k:v['peerURLs'][0] for k,v in etcdclient.members.iteritems()}))
-
-                    if args.dryrun:
-                        logger.info('would\'ve added new member %s to cluster'%ip)
-                    else:
-                        logger.info('adding new member %s to cluster'%ip)
-                        # add to cluster
-                        etcdclient.addmember("http://%s:2380"%ip)
+                # check if it's a msg for us
+                if body['EC2InstanceId'] == os.environ['COREOS_EC2_INSTANCE_ID']:
+                    logger.info('got an AS msg for ourselves, ignoring')
                 else:
-                    logger.info('could not get ip for instance %s, ignoring'%body['EC2InstanceId'])
+                    # get new instance's ip from aws
+                    ip = boto3.resource('ec2',region_name=args.region).Instance(body['EC2InstanceId']).private_ip_address
+
+                    if ip:
+                        logger.info('sending peerlist to etcd queue')
+                        putmsg(etcdqueue,json.dumps({k:v['peerURLs'][0] for k,v in etcdclient.members.iteritems()}))
+
+                        if args.dryrun:
+                            logger.info('would\'ve added new member %s to cluster'%ip)
+                        else:
+                            logger.info('adding new member %s to cluster'%ip)
+                            # add to cluster
+                            etcdclient.addmember("http://%s:2380"%ip)
+                    else:
+                        logger.info('could not get ip for instance %s, ignoring'%body['EC2InstanceId'])
+
+                msg.delete()
             else:
                 logger.warning('unknown AS msg received')
 
-            msg.delete()
 
     else:
         logger.debug('not leader')
