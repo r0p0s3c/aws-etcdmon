@@ -225,7 +225,7 @@ while True:
 		
             elif body['LifecycleTransition'] == 'autoscaling:EC2_INSTANCE_LAUNCHING':
                 # sendmsg with peerURLs to queue for new member to configure themselves
-                logger.detected('launch of %s detected'%body['EC2InstanceId'])
+                logger.info('launch of %s detected'%body['EC2InstanceId'])
                 
                 # get new instance's ip from aws
                 ip = boto3.resource('ec2',region_name=args.region).Instance(body['EC2InstanceId']).private_ip_address
