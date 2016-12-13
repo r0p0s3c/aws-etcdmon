@@ -9,6 +9,7 @@ import logging
 import time
 import boto3
 import sys
+import urlparse
 
 parser = argparse.ArgumentParser()
 parser.add_argument('region', help="region")
@@ -235,15 +236,19 @@ while True:
                     ip = boto3.resource('ec2',region_name=args.region).Instance(body['EC2InstanceId']).private_ip_address
 
                     if ip:
-                        logger.info('sending peerlist to etcd queue')
-                        putmsg(etcdqueue,json.dumps({k:v['peerURLs'][0] for k,v in etcdclient.members.iteritems()}))
+                        # check if ip already member
+                        if ip in [urlparse.urlparse(v['peerURLs'][0]).hostname for k,v in client.members.iteritems()]:
+                            logger.info('sending peerlist to etcd queue')
+                            putmsg(etcdqueue,json.dumps({k:v['peerURLs'][0] for k,v in etcdclient.members.iteritems()}))
 
-                        if args.dryrun:
-                            logger.info('would\'ve added new member %s to cluster'%ip)
+                            if args.dryrun:
+                                logger.info('would\'ve added new member %s to cluster'%ip)
+                            else:
+                                logger.info('adding new member %s to cluster'%ip)
+                                # add to cluster
+                                etcdclient.addmember("http://%s:2380"%ip)
                         else:
-                            logger.info('adding new member %s to cluster'%ip)
-                            # add to cluster
-                            etcdclient.addmember("http://%s:2380"%ip)
+                            logger.info('%s already in member list, not adding'%ip)
                     else:
                         logger.info('could not get ip for instance %s, ignoring'%body['EC2InstanceId'])
 
