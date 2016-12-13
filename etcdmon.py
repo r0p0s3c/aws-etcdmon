@@ -1,15 +1,15 @@
 #!/usr/bin/env python
+import time
+import sys
 import json
 import argparse
+import urlparse
 import etcd
 import os
 from datetime import datetime
 import dbus
 import logging
-import time
 import boto3
-import sys
-import urlparse
 
 parser = argparse.ArgumentParser()
 parser.add_argument('region', help="region")
@@ -38,12 +38,18 @@ ch = logging.StreamHandler()
 ch.setLevel(logging.DEBUG)
 
 # create formatter
-formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+formatter = logging.Formatter('%(message)s')
 
 # add formatter to ch
 ch.setFormatter(formatter)
 
 logger.addHandler(ch)
+
+if args.debug:
+    logger.debug('logging at level DEBUG')
+else:
+    logger.info('logging at level INFO')
+
 
 def _getsystemd():
     sysbus = dbus.SystemBus()
@@ -53,18 +59,18 @@ def _getsystemd():
 
 def writeetcdconf(path, initclusterstate, cluster):
     if initclusterstate:
-        initclusterstate='existing'
+        initclusterstate = 'existing'
     else:
         initclusterstate='new'
 
-    unitstr = '[Service]\nEnvironment=ETCD_NAME=%s\nEnvironment=ETCD_INITIAL_CLUSTER_STATE=%s\nEnvironment=ETCD_INITIAL_CLUSTER=%s\n'%(os.environ['COREOS_EC2_INSTANCE_ID'],initclusterstate,','.join(["%s=%s"%(id,uri) for id,uri in cluster.iteritems()]))
+    unitstr = '[Service]\nEnvironment=ETCD_NAME=%s\nEnvironment=ETCD_INITIAL_CLUSTER_STATE=%s\nEnvironment=ETCD_INITIAL_CLUSTER=%s\n'%(os.environ['COREOS_EC2_INSTANCE_ID'], initclusterstate,','.join(["%s=%s"%(id, uri) for id, uri in cluster.iteritems()]))
 
     if not args.dryrun:
         with open(path,'w') as conffile:
             logger.debug('writing etcd initial config to %s'%path)
             conffile.write(unitstr)
     else:
-        logger.debug('would\'ve written %s to %s'%(unitstr,path))
+        logger.debug('would\'ve written %s to %s'%(unitstr, path))
 
     if not args.dryrun:
         logger.debug('reloading systemd')
@@ -89,7 +95,7 @@ def getasmsg(queue, msgfilterfunc=lambda body: 'LifecycleTransition' in body):
             # delete test msg and call ourselves to get the next one
             logger.debug('got a test msg')
             msg.delete()
-            return getasmsg(queue,msgfilterfunc)
+            return getasmsg(queue, msgfilterfunc)
         elif msgfilterfunc(body):
             # handle instance start/delete
             logger.debug('got a matching AS msg')
@@ -127,17 +133,17 @@ def getmsg(queue):
     return msg
 
 def putmsg(queue, msgbody):
-    logger.debug('putting msg %s -> %s'%(msgbody,queue))
+    logger.debug('putting msg %s -> %s'%(msgbody, queue))
     queue.send_message(MessageBody=msgbody)
 
 # initclusterstate: 0 == new, 1 == existing
 initclusterstate=1
 cluster = {}
-asqueue = boto3.resource('sqs',region_name=args.region).Queue(args.asqueueurl)
-etcdqueue = boto3.resource('sqs',region_name=args.region).Queue(args.etcdqueueurl)
+asqueue = boto3.resource('sqs', region_name=args.region).Queue(args.asqueueurl)
+etcdqueue = boto3.resource('sqs', region_name=args.region).Queue(args.etcdqueueurl)
 
 # check if etcd2 is up
-etcdclient = etcd.Client(host=os.environ['COREOS_EC2_IPV4_LOCAL'],port=2379)
+etcdclient = etcd.Client(host=os.environ['COREOS_EC2_IPV4_LOCAL'], port=2379)
 try:
     leader = etcdclient.leader
 except etcd.EtcdException:
@@ -147,13 +153,13 @@ except etcd.EtcdException:
     while True:
         # check if there is a launch msg for us, if so make sure it's old enough before
         # assuming we are leader
-        msg = getasmsg(asqueue,msgfilterfunc=lambda body: 'LifecycleTransition' in body and body['LifecycleTransition']=='autoscaling:EC2_INSTANCE_LAUNCHING' and body['EC2InstanceId'] == os.environ['COREOS_EC2_INSTANCE_ID'])
+        msg = getasmsg(asqueue, msgfilterfunc=lambda body: 'LifecycleTransition' in body and body['LifecycleTransition']=='autoscaling:EC2_INSTANCE_LAUNCHING' and body['EC2InstanceId'] == os.environ['COREOS_EC2_INSTANCE_ID'])
 
         if msg:
             logger.debug('found lifecycle message in as queue')
             body = json.loads(msg.body)
             # check if event time is too old
-            if (datetime.now() - datetime.strptime(body['Time'],'%Y-%m-%dT%H:%M:%S.%fZ')).total_seconds() > args.initwaittime:
+            if (datetime.now() - datetime.strptime(body['Time'], '%Y-%m-%dT%H:%M:%S.%fZ')).total_seconds() > args.initwaittime:
                 logger.info('going to be leader')
                 # assume we need to be leader
                 if args.dryrun:
@@ -184,9 +190,9 @@ except etcd.EtcdException:
                 logger.debug('did not get peers, sleeping to try again')
                 time.sleep(args.initwaittime)
         cluster[os.environ['COREOS_EC2_INSTANCE_ID']]="http://%s:2380"%os.environ['COREOS_EC2_IPV4_LOCAL']
-        logger.info('cluster peers are %s'%','.join([v for k,v in cluster.iteritems()]))
+        logger.info('cluster peers are %s'%','.join([v for k, v in cluster.iteritems()]))
     # write etcd systemd config
-    writeetcdconf(args.etcdconfpath,initclusterstate,cluster)
+    writeetcdconf(args.etcdconfpath, initclusterstate, cluster)
     # start etcd
     restartetcd()
     # connect to etcd
@@ -214,15 +220,22 @@ while True:
             body = json.loads(msg.body)
 
             if body['LifecycleTransition'] == 'autoscaling:EC2_INSTANCE_TERMINATING':
-                # delete from cluster
-                if args.dryrun:
-                    logger.info('would\'ve deleted member %s'%body['EC2InstanceId'])
+                # delete from cluster after checking
+                memberid = [k for k, v in etcdclient.members.iteritems() if v['name']==body['EC2InstanceId']]
+                
+                if memberid:
+                    # due to list comprehension
+                    memberid = memberid[0]
+                    if args.dryrun:
+                        logger.info('would\'ve deleted member %s'%memberid)
+                    else:
+                        logger.info('deleting member %s'%memberid)
+                        try:
+                            etcdclient.deletemember(memberid)
+                        except etcd.EtcdException as e:
+                            logger.warning('error deleting member %s (%s): %s'%(memberid, body['EC2InstanceId'], e))
                 else:
-                    logger.info('deleting member %s'%body['EC2InstanceId'])
-                    try:
-		    	etcdclient.deletemember(body['EC2InstanceId'])
-		    except etcd.EtcdException as e:
-			logger.warning('error deleting memberi %s'%body['EC2InstanceId'])
+                    logger.info('ignoring delete of non-member with machineid %s'%body['EC2InstanceId'])
                 msg.delete()
             elif body['LifecycleTransition'] == 'autoscaling:EC2_INSTANCE_LAUNCHING':
                 # sendmsg with peerURLs to queue for new member to configure themselves
@@ -233,13 +246,13 @@ while True:
                     logger.info('got an AS msg for ourselves, ignoring')
                 else:
                     # get new instance's ip from aws
-                    ip = boto3.resource('ec2',region_name=args.region).Instance(body['EC2InstanceId']).private_ip_address
+                    ip = boto3.resource('ec2', region_name=args.region).Instance(body['EC2InstanceId']).private_ip_address
 
                     if ip:
                         # check if ip already member
-                        if ip not in [urlparse.urlparse(v['peerURLs'][0]).hostname for k,v in etcdclient.members.iteritems()]:
+                        if ip not in [urlparse.urlparse(v['peerURLs'][0]).hostname for k, v in etcdclient.members.iteritems()]:
                             logger.info('sending peerlist to etcd queue')
-                            putmsg(etcdqueue,json.dumps({k:v['peerURLs'][0] for k,v in etcdclient.members.iteritems()}))
+                            putmsg(etcdqueue, json.dumps({k:v['peerURLs'][0] for k, v in etcdclient.members.iteritems()}))
 
                             if args.dryrun:
                                 logger.info('would\'ve added new member %s to cluster'%ip)
