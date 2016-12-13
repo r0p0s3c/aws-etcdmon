@@ -237,7 +237,7 @@ while True:
 
                     if ip:
                         # check if ip already member
-                        if ip in [urlparse.urlparse(v['peerURLs'][0]).hostname for k,v in etcdclient.members.iteritems()]:
+                        if ip not in [urlparse.urlparse(v['peerURLs'][0]).hostname for k,v in etcdclient.members.iteritems()]:
                             logger.info('sending peerlist to etcd queue')
                             putmsg(etcdqueue,json.dumps({k:v['peerURLs'][0] for k,v in etcdclient.members.iteritems()}))
 
