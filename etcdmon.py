@@ -6,6 +6,7 @@ import argparse
 import urlparse
 import etcd
 import os
+import random
 from datetime import datetime
 import dbus
 import logging
@@ -22,6 +23,7 @@ parser.add_argument('-i', '--initwaittime', type=int, default=120, help="number 
         seconds to wait on startup before assuming no leader exists")
 parser.add_argument('-w', '--waittime', type=int, default=15, help="number of seconds \
         to wait between checking for change in leadership or queue messages")
+parser.add_argument('-r', '--waitrand', type=float, default=0.1, help="randomisation to use with wait times")
 parser.add_argument('-f', '--etcdconfpath', default="/etc/systemd/system/etcd2.service.d/10-init.conf", help="directory to write etcd systemd unit override/conf to")
 args = parser.parse_args()
 
@@ -101,6 +103,7 @@ def getasmsg(queue, msgfilterfunc=lambda body: 'LifecycleTransition' in body):
             logger.debug('got a matching AS msg')
         else:
             logger.debug('did not get a matching AS msg')
+            msg = None
 
     return msg
 
@@ -175,7 +178,7 @@ except etcd.EtcdException:
                 # there was a message in the queue, but it was too recent
                 # sleep to allow leader to clear queue
                 logger.debug('lifecycle message too recent, sleeping')
-                time.sleep(args.initwaittime)
+                time.sleep(args.initwaittime+(args.initwaittime*random.uniform(-1*args.waitrand,args.waitrand)))
         else:
             # no messages in queue, presume we are not going to be leader
             logger.info('no lifecycle message in queue, assuming non-leader')
@@ -188,7 +191,7 @@ except etcd.EtcdException:
             cluster = getetcdpeers(etcdqueue)
             if not cluster:
                 logger.debug('did not get peers, sleeping to try again')
-                time.sleep(args.initwaittime)
+                time.sleep(args.initwaittime+(args.initwaittime*random.uniform(-1*args.waitrand,args.waitrand)))
         cluster[os.environ['COREOS_EC2_INSTANCE_ID']]="http://%s:2380"%os.environ['COREOS_EC2_IPV4_LOCAL']
         logger.info('cluster peers are %s'%','.join([v for k, v in cluster.iteritems()]))
     # write etcd systemd config
@@ -275,4 +278,4 @@ while True:
 
     # sleep for a bit
     logger.debug('sleeping for a bit')
-    time.sleep(args.waittime)
+    time.sleep(args.waittime+(args.waittime*random.uniform(-1*args.waitrand,args.waitrand)))
