@@ -215,8 +215,10 @@ while True:
     leaderid = etcdclient.leader['name']
 
     if leaderid == os.environ['COREOS_EC2_INSTANCE_ID']:
-        logger.debug('we are leader, processing messages')
         # we are leader, check and deal with queue messages
+        logger.debug('we are leader, processing messages')
+        # leaders loop more frequently to beat non-leader members at everything
+        waittime = args.waittime/4
         msg = getasmsg(asqueue)
 
         if msg:
@@ -247,35 +249,49 @@ while True:
                 # check if it's a msg for us
                 if body['EC2InstanceId'] == os.environ['COREOS_EC2_INSTANCE_ID']:
                     logger.info('got an AS msg for ourselves, ignoring')
+                    msg.delete()
                 else:
-                    # get new instance's ip from aws
-                    ip = boto3.resource('ec2', region_name=args.region).Instance(body['EC2InstanceId']).private_ip_address
+                    bsmembers = [k for k,v in etcdclient.members.iteritems() if v['name']=='' or v['clientURLs']]
 
-                    if ip:
-                        # check if ip already member
-                        if ip not in [urlparse.urlparse(v['peerURLs'][0]).hostname for k, v in etcdclient.members.iteritems()]:
-                            logger.info('sending peerlist to etcd queue')
-                            putmsg(etcdqueue, json.dumps({k:v['peerURLs'][0] for k, v in etcdclient.members.iteritems()}))
-
-                            if args.dryrun:
-                                logger.info('would\'ve added new member %s to cluster'%ip)
-                            else:
-                                logger.info('adding new member %s to cluster'%ip)
-                                # add to cluster
-                                etcdclient.addmember("http://%s:2380"%ip)
-                        else:
-                            logger.info('%s already in member list, not adding'%ip)
+                    if bsmembers:
+                        # there is one member that is still bootstrapping/joining, do not add more
+                        # otherwise we will have quorum issues
+                        # note message visibility means the AS messages are not visible in the queue
+                        # as we are reading them, but we will eventually process them and add all members
+                        logger.warning('member %s is still bootstrapping/joining, not adding another member'%bsmembers[0])
+                        # waittime needs to be even shorter to catch the new member quickly
+                        waittime = waittime/4
                     else:
-                        logger.info('could not get ip for instance %s, ignoring'%body['EC2InstanceId'])
+                        # get new instance's ip from aws
+                        ip = boto3.resource('ec2', region_name=args.region).Instance(body['EC2InstanceId']).private_ip_address
 
-                msg.delete()
+                        if ip:
+                            # check if ip already member
+                            if ip not in [urlparse.urlparse(v['peerURLs'][0]).hostname for k, v in etcdclient.members.iteritems()]:
+                                logger.info('sending peerlist to etcd queue')
+                                putmsg(etcdqueue, json.dumps({k:v['peerURLs'][0] for k, v in etcdclient.members.iteritems()}))
+
+                                if args.dryrun:
+                                    logger.info('would\'ve added new member %s to cluster'%ip)
+                                else:
+                                    logger.info('adding new member %s to cluster'%ip)
+                                    # add to cluster
+                                    etcdclient.addmember("http://%s:2380"%ip)
+                            else:
+                                logger.info('%s already in member list, not adding'%ip)
+                        else:
+                            logger.info('could not get ip for instance %s, ignoring'%body['EC2InstanceId'])
+
+                        msg.delete()
             else:
                 logger.warning('unknown AS msg received')
 
 
     else:
+        waittime = args.waittime
         logger.debug('not leader')
 
     # sleep for a bit
-    logger.debug('sleeping for a bit')
-    time.sleep(args.waittime+(args.waittime*random.uniform(-1*args.waitrand,args.waitrand)))
+    sleeptime = waittime+(waittime*random.uniform(-1*args.waitrand,args.waitrand))
+    logger.debug('sleeping for %f seconds'%sleeptime)
+    time.sleep(sleeptime)
