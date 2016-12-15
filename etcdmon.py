@@ -251,7 +251,7 @@ while True:
                     logger.info('got an AS msg for ourselves, ignoring')
                     msg.delete()
                 else:
-                    bsmembers = [k for k,v in etcdclient.members.iteritems() if v['name']=='' or v['clientURLs']]
+                    bsmembers = [k for k,v in etcdclient.members.iteritems() if v['name']=='' or not v['clientURLs']]
 
                     if bsmembers:
                         # there is one member that is still bootstrapping/joining, do not add more
