@@ -25,6 +25,7 @@ parser.add_argument('-w', '--waittime', type=int, default=15, help="number of se
         to wait between checking for change in leadership or queue messages")
 parser.add_argument('-r', '--waitrand', type=float, default=0.1, help="randomisation to use with wait times")
 parser.add_argument('-f', '--etcdconfpath', default="/etc/systemd/system/etcd2.service.d/10-init.conf", help="directory to write etcd systemd unit override/conf to")
+parser.add_argument('-s', '--etcdstatedir', default="/var/lib/etcd2/member", help="etcd2 state dir to check")
 args = parser.parse_args()
 
 # we do things this way so modules/libraries we use don't log at our level, whatever it is
@@ -258,9 +259,15 @@ while True:
                         # otherwise we will have quorum issues
                         # note message visibility means the AS messages are not visible in the queue
                         # as we are reading them, but we will eventually process them and add all members
-                        logger.warning('member %s is still bootstrapping/joining, not adding another member'%bsmembers[0])
+                        logger.warning('member %s is still bootstrapping/joining, delaying add of %s'%(bsmembers[0],body['EC2InstanceId']))
                         # waittime needs to be even shorter to catch the new member quickly
                         waittime = waittime/4
+                        # reset the AS message time to now so other waiting potential members
+                        # do not assume there is no leader
+                        body['Time'] = datetime.now().strftime('%Y-%m-%dT%H:%M:%S.%fZ')
+                        msg.delete()
+                        putmsg(asqueue,body)
+                        logger.debug('re-adding AS message for %s with time reset to now'%body['EC2InstanceId'])
                     else:
                         # get new instance's ip from aws
                         ip = boto3.resource('ec2', region_name=args.region).Instance(body['EC2InstanceId']).private_ip_address
