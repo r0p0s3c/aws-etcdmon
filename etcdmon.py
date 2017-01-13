@@ -142,6 +142,7 @@ def putmsg(queue, msgbody):
     queue.send_message(MessageBody=msgbody)
 
 # initclusterstate: 0 == new, 1 == existing
+initclusterstate = 1
 cluster = dict()
 asqueue = boto3.resource('sqs', region_name=args.region).Queue(args.asqueueurl)
 etcdqueue = boto3.resource('sqs', region_name=args.region).Queue(args.etcdqueueurl)
@@ -153,6 +154,7 @@ etcdclient = etcd.Client(host=os.environ['COREOS_EC2_IPV4_LOCAL'], port=2379)
 # - if etcdq has a message, assume we are not leader and configure etcd with given peers
 # - if as q has a message, check msg time to allow chance for potentially existing leader
 #   to clear it
+# keep looping until one or the other happens
 
 while True:
     # always try to connect to etcd in case it was restarting
@@ -165,6 +167,7 @@ while True:
         # check if there is an etcdqueue msg, if so we are non-leader
         cluster = getetcdpeers(etcdqueue)
         if cluster:
+            initclusterstate = 1
             break
         else:
             # check if there is a launch msg for us, if so make sure it's old enough before
@@ -184,6 +187,7 @@ while True:
                         logger.debug('deleted as msg')
                         msg.delete()
 
+                    initclusterstate = 0
                     break
                 else:
                     # there was a message in the queue, but it was too recent
