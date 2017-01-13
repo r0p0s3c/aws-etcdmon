@@ -50,6 +50,7 @@ logger.addHandler(ch)
 
 if args.debug:
     logger.debug('logging at level DEBUG')
+    logger.debug('REGION=%s ASQUEUEURL=%s ETCDQUEUEURL=%s'%(args.region,args.asqueueurl,args.etcdqueueurl))
 else:
     logger.info('logging at level INFO')
 
@@ -141,73 +142,74 @@ def putmsg(queue, msgbody):
     queue.send_message(MessageBody=msgbody)
 
 # initclusterstate: 0 == new, 1 == existing
-initclusterstate=1
-cluster = {}
+cluster = dict()
 asqueue = boto3.resource('sqs', region_name=args.region).Queue(args.asqueueurl)
 etcdqueue = boto3.resource('sqs', region_name=args.region).Queue(args.etcdqueueurl)
 
 # check if etcd2 is up
 etcdclient = etcd.Client(host=os.environ['COREOS_EC2_IPV4_LOCAL'], port=2379)
-try:
-    leader = etcdclient.leader
-except etcd.EtcdException:
-    # could not connect to etcd, do init thing
-    logger.debug('could not connect to etcd, initialising config')
 
-    while True:
-        # check if there is a launch msg for us, if so make sure it's old enough before
-        # assuming we are leader
-        msg = getasmsg(asqueue, msgfilterfunc=lambda body: 'LifecycleTransition' in body and body['LifecycleTransition']=='autoscaling:EC2_INSTANCE_LAUNCHING' and body['EC2InstanceId'] == os.environ['COREOS_EC2_INSTANCE_ID'])
+# logic is to loop while checking:
+# - if etcdq has a message, assume we are not leader and configure etcd with given peers
+# - if as q has a message, check msg time to allow chance for potentially existing leader
+#   to clear it
 
-        if msg:
-            logger.debug('found lifecycle message in as queue')
-            body = json.loads(msg.body)
-            # check if event time is too old
-            if (datetime.now() - datetime.strptime(body['Time'], '%Y-%m-%dT%H:%M:%S.%fZ')).total_seconds() > args.initwaittime:
-                logger.info('going to be leader')
-                # assume we need to be leader
-                if args.dryrun:
-                    logger.debug('would\'ve deleted as msg')
-                else:
-                    logger.debug('deleted as msg')
-                    msg.delete()
+while True:
+    # always try to connect to etcd in case it was restarting
+    try:
+        leader = etcdclient.leader
+    except etcd.EtcdException:
+        # could not connect to etcd, do init thing
+        logger.debug('could not connect to etcd, initialising config')
 
-                initclusterstate=0
-                cluster = {os.environ['COREOS_EC2_INSTANCE_ID']:"http://%s:2380"%os.environ['COREOS_EC2_IPV4_LOCAL']}
-                break
-            else:
-                # there was a message in the queue, but it was too recent
-                # sleep to allow leader to clear queue
-                logger.debug('lifecycle message too recent, sleeping')
-                time.sleep(args.initwaittime+(args.initwaittime*random.uniform(-1*args.waitrand,args.waitrand)))
+        # check if there is an etcdqueue msg, if so we are non-leader
+        cluster = getetcdpeers(etcdqueue)
+        if cluster:
+            break
         else:
-            # no messages in queue, presume we are not going to be leader
-            logger.info('no lifecycle message in queue, assuming non-leader')
-            initclusterstate=1
-            break
+            # check if there is a launch msg for us, if so make sure it's old enough before
+            # assuming we are leader
+            msg = getasmsg(asqueue, msgfilterfunc=lambda body: 'LifecycleTransition' in body and body['LifecycleTransition']=='autoscaling:EC2_INSTANCE_LAUNCHING' and body['EC2InstanceId'] == os.environ['COREOS_EC2_INSTANCE_ID'])
 
-    if initclusterstate == 1:
-        # check etcdqueue and wait for peer information from leader
-        while not cluster:
-            cluster = getetcdpeers(etcdqueue)
-            if not cluster:
-                logger.debug('did not get peers, sleeping to try again')
-                time.sleep(args.initwaittime+(args.initwaittime*random.uniform(-1*args.waitrand,args.waitrand)))
-        cluster[os.environ['COREOS_EC2_INSTANCE_ID']]="http://%s:2380"%os.environ['COREOS_EC2_IPV4_LOCAL']
-        logger.info('cluster peers are %s'%','.join([v for k, v in cluster.iteritems()]))
-    # write etcd systemd config
-    writeetcdconf(args.etcdconfpath, initclusterstate, cluster)
-    # start etcd
-    restartetcd()
-    # connect to etcd
-    while True:
-        try:
-            etcdclient.leader
-            logger.debug('etcd up, proceeding')
-            break
-        except etcd.EtcdException:
-            logger.debug('could not connect to etcd, sleeping')
-            time.sleep(1)
+            if msg:
+                logger.debug('found lifecycle message in as queue')
+                body = json.loads(msg.body)
+                # check if event time is too old
+                if (datetime.now() - datetime.strptime(body['Time'], '%Y-%m-%dT%H:%M:%S.%fZ')).total_seconds() > args.initwaittime:
+                    logger.info('going to be leader')
+                    # assume we need to be leader
+                    if args.dryrun:
+                        logger.debug('would\'ve deleted as msg')
+                    else:
+                        logger.debug('deleted as msg')
+                        msg.delete()
+
+                    break
+                else:
+                    # there was a message in the queue, but it was too recent
+                    # sleep to allow leader to clear queue
+                    logger.debug('lifecycle message too recent, sleeping')
+                    time.sleep(args.initwaittime+(args.initwaittime*random.uniform(-1*args.waitrand,args.waitrand)))
+
+# init cluster var in case it is None
+if not cluster:
+    cluster = dict()
+
+cluster[os.environ['COREOS_EC2_INSTANCE_ID']]="http://%s:2380"%os.environ['COREOS_EC2_IPV4_LOCAL']
+logger.info('cluster peers are %s'%','.join([v for k, v in cluster.iteritems()]))
+# write etcd systemd config
+writeetcdconf(args.etcdconfpath, initclusterstate, cluster)
+# start etcd
+restartetcd()
+# connect to etcd
+while True:
+    try:
+        etcdclient.leader
+        logger.debug('etcd up, proceeding')
+        break
+    except etcd.EtcdException:
+        logger.debug('could not connect to etcd, sleeping')
+        time.sleep(1)
 
 
 # start main monitoring loop
