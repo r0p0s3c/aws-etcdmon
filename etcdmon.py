@@ -109,20 +109,25 @@ def getasmsg(queue, msgfilterfunc=lambda body: 'LifecycleTransition' in body):
 
     return msg
 
-# get peers message from etcd queue
-# returns the peers msg unaltered
-def getetcdpeers(queue):
+# get message from etcd queue and check we are in it
+# iff return that, otherwise None
+def getetcdpeersmsg(queue):
     msg = getmsg(queue)
     peers = None
 
     if msg:
-        logger.debug('got an etcd peer msg')
-        peers = json.loads(msg.body)
+        logger.debug('got possible etcd peer msg')
+        plist = json.loads(msg.body)
 
-        if args.dryrun:
-            logger.debug('would\'ve deleted etcd peer msg')
+        # check if our machineid is in cluster, otherwise not for us
+        if os.environ['COREOS_EC2_INSTANCE_ID'] in plist:
+            peers = plist
+            if args.dryrun:
+                logger.debug('would\'ve deleted etcd peer msg')
+            else:
+                msg.delete()
         else:
-            msg.delete()
+            logger.debug('etdc peer msg doesn\'t contain our machineid, not for us')
     return peers
 
 
@@ -165,7 +170,7 @@ while True:
         logger.debug('could not connect to etcd, initialising config')
 
         # check if there is an etcdqueue msg, if so we are non-leader
-        cluster = getetcdpeers(etcdqueue)
+        cluster = getetcdpeersmsg(etcdqueue)
         if cluster:
             initclusterstate = 1
             break
@@ -188,6 +193,8 @@ while True:
                         msg.delete()
 
                     initclusterstate = 0
+                    # set cluster list to just us
+                    cluster = {os.environ['COREOS_EC2_INSTANCE_ID']:"http://%s:2380"%os.environ['COREOS_EC2_IPV4_LOCAL']}
                     break
                 else:
                     # there was a message in the queue, but it was too recent
@@ -195,12 +202,7 @@ while True:
                     logger.debug('lifecycle message too recent, sleeping')
                     time.sleep(args.initwaittime+(args.initwaittime*random.uniform(-1*args.waitrand,args.waitrand)))
 
-# init cluster var in case it is None
-if not cluster:
-    cluster = dict()
-
-cluster[os.environ['COREOS_EC2_INSTANCE_ID']]="http://%s:2380"%os.environ['COREOS_EC2_IPV4_LOCAL']
-logger.info('cluster peers are %s'%','.join([v for k, v in cluster.iteritems()]))
+logger.info('cluster peerlist is %s'%','.join([v for k, v in cluster.iteritems()]))
 # write etcd systemd config
 writeetcdconf(args.etcdconfpath, initclusterstate, cluster)
 # start etcd
@@ -282,7 +284,7 @@ while True:
                             # check if ip already member
                             if ip not in [urlparse.urlparse(v['peerURLs'][0]).hostname for k, v in etcdclient.members.iteritems()]:
                                 logger.info('sending peerlist to etcd queue')
-                                putmsg(etcdqueue, json.dumps({k:v['peerURLs'][0] for k, v in etcdclient.members.iteritems()}))
+                                putmsg(etcdqueue, json.dumps(dict({k:v['peerURLs'][0] for k, v in etcdclient.members.iteritems()}.items() + {body['EC2InstanceId']:"http://%s:2380"%ip}.items())))
 
                                 if args.dryrun:
                                     logger.info('would\'ve added new member %s to cluster'%ip)
