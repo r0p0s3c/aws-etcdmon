@@ -142,6 +142,7 @@ def getmsg(queue):
 
     return msg
 
+# expects msgbody to be string
 def putmsg(queue, msgbody):
     logger.debug('putting msg %s -> %s'%(msgbody, queue))
     queue.send_message(MessageBody=msgbody)
@@ -274,7 +275,7 @@ while True:
                         # do not assume there is no leader
                         body['Time'] = datetime.now().strftime('%Y-%m-%dT%H:%M:%S.%fZ')
                         msg.delete()
-                        putmsg(asqueue,body)
+                        putmsg(asqueue,json.dumps(body))
                         logger.debug('re-adding AS message for %s with time reset to now'%body['EC2InstanceId'])
                     else:
                         # get new instance's ip from aws
