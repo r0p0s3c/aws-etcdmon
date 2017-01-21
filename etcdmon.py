@@ -62,10 +62,12 @@ def _getsystemd():
     return manager
 
 def writeetcdconf(path, initclusterstate, cluster):
-    if initclusterstate:
+    if initclusterstate == 2:
         initclusterstate = 'existing'
-    else:
+    elif initclusterstate == 1:
         initclusterstate='new'
+    else:
+        raise RuntimeError('writeetcdconf called with initclusterstate==%s'%initclusterstate)
 
     unitstr = '[Service]\nEnvironment=ETCD_NAME=%s\nEnvironment=ETCD_INITIAL_CLUSTER_STATE=%s\nEnvironment=ETCD_INITIAL_CLUSTER=%s\n'%(os.environ['COREOS_EC2_INSTANCE_ID'], initclusterstate,','.join(["%s=%s"%(id, uri) for id, uri in cluster.iteritems()]))
 
@@ -147,8 +149,8 @@ def putmsg(queue, msgbody):
     logger.debug('putting msg %s -> %s'%(msgbody, queue))
     queue.send_message(MessageBody=msgbody)
 
-# initclusterstate: 0 == new, 1 == existing
-initclusterstate = 1
+# initclusterstate: 0 == no init required, 1 == new, 2 == existing
+initclusterstate = 0
 cluster = dict()
 asqueue = boto3.resource('sqs', region_name=args.region).Queue(args.asqueueurl)
 etcdqueue = boto3.resource('sqs', region_name=args.region).Queue(args.etcdqueueurl)
@@ -166,6 +168,7 @@ while True:
     # always try to connect to etcd in case it was restarting
     try:
         leader = etcdclient.leader
+        break
     except etcd.EtcdException:
         # could not connect to etcd, do init thing
         logger.debug('could not connect to etcd, initialising config')
@@ -173,7 +176,7 @@ while True:
         # check if there is an etcdqueue msg, if so we are non-leader
         cluster = getetcdpeersmsg(etcdqueue)
         if cluster:
-            initclusterstate = 1
+            initclusterstate = 2
             break
         else:
             # check if there is a launch msg for us, if so make sure it's old enough before
@@ -193,7 +196,7 @@ while True:
                         logger.debug('deleted as msg')
                         msg.delete()
 
-                    initclusterstate = 0
+                    initclusterstate = 1
                     # set cluster list to just us
                     cluster = {os.environ['COREOS_EC2_INSTANCE_ID']:"http://%s:2380"%os.environ['COREOS_EC2_IPV4_LOCAL']}
                     break
@@ -203,12 +206,13 @@ while True:
                     logger.debug('lifecycle message too recent, sleeping')
                     time.sleep(args.initwaittime+(args.initwaittime*random.uniform(-1*args.waitrand,args.waitrand)))
 
-logger.info('cluster peerlist is %s'%','.join([v for k, v in cluster.iteritems()]))
-# write etcd systemd config
-writeetcdconf(args.etcdconfpath, initclusterstate, cluster)
-# start etcd
-restartetcd()
-# connect to etcd
+if initclusterstate>0:
+    logger.info('initialising etcd, cluster peerlist is %s'%','.join([v for k, v in cluster.iteritems()]))
+    # write etcd systemd config
+    writeetcdconf(args.etcdconfpath, initclusterstate, cluster)
+    # start etcd
+    restartetcd()
+
 while True:
     try:
         etcdclient.leader
@@ -217,7 +221,6 @@ while True:
     except etcd.EtcdException:
         logger.debug('could not connect to etcd, sleeping')
         time.sleep(1)
-
 
 # start main monitoring loop
 while True:
