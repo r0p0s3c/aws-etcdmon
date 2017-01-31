@@ -227,11 +227,10 @@ while True:
         time.sleep(1)
 
 # start main monitoring loop
-memberids = sorted(etcdclient.members.keys())
+memberids = sorted([v['name'] for k,v in etcdclient.members.iteritems() if v['name']])
 
 while True:
     logger.debug('in monitoring loop')
-    newmemberids = sorted(etcdclient.members.keys())
     leaderid = etcdclient.leader['name']
 
     if leaderid == os.environ['COREOS_EC2_INSTANCE_ID']:
@@ -317,15 +316,18 @@ while True:
         waittime = args.waittime
         logger.debug('not leader')
 
+    # see if there has been a cluster membership change
+    newmemberids = sorted([v['name'] for k,v in etcdclient.members.iteritems() if v['name']])
+
     if memberids != newmemberids:
+        logger.info('cluster membership change, restarting units')
+        logger.debug('(old)memberids = %s'%(','.join(memberids)))
         logger.debug('newmemberids = %s'%(','.join(newmemberids)))
         # restart units
-        logger.info('restarting units')
         with open(args.restartunitfile,'r') as f:
             for unit in f:
                 unit = unit.rstrip()
                 logger.debug('restarting unit %s'%unit)
-                restartunit(unit)
                 time.sleep(waittime)
         memberids = newmemberids
 
