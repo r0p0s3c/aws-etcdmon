@@ -26,6 +26,7 @@ parser.add_argument('-w', '--waittime', type=int, default=15, help="number of se
 parser.add_argument('-r', '--waitrand', type=float, default=0.1, help="randomisation to use with wait times")
 parser.add_argument('-f', '--etcdconfpath', default="/etc/systemd/system/etcd2.service.d/10-init.conf", help="directory to write etcd systemd unit override/conf to")
 parser.add_argument('-s', '--etcdstatedir', default="/var/lib/etcd2/member", help="etcd2 state dir to check")
+parser.add_argument('-u', '--restartunitfile', default="/restartunit.list", help="file listing units to restart on etcd2 membership change")
 args = parser.parse_args()
 
 # we do things this way so modules/libraries we use don't log at our level, whatever it is
@@ -89,7 +90,10 @@ def restartetcd():
         logger.debug('would\'ve restarted etcd2')
     else:
         logger.debug('restarting etcd2')
-        _getsystemd().RestartUnit('etcd2.service', 'replace')
+        restartunit('etcd2.service')
+
+def restartunit(unit):
+        _getsystemd().RestartUnit(unit, 'replace')
 
 def getasmsg(queue, msgfilterfunc=lambda body: 'LifecycleTransition' in body):
 
@@ -223,8 +227,11 @@ while True:
         time.sleep(1)
 
 # start main monitoring loop
+memberids = sorted(etcdclient.members.keys())
+
 while True:
     logger.debug('in monitoring loop')
+    newmemberids = sorted(etcdclient.members.keys())
     leaderid = etcdclient.leader['name']
 
     if leaderid == os.environ['COREOS_EC2_INSTANCE_ID']:
@@ -309,6 +316,18 @@ while True:
     else:
         waittime = args.waittime
         logger.debug('not leader')
+
+    if memberids != newmemberids:
+        logger.debug('newmemberids = %s'%(','.join(newmemberids)))
+        # restart units
+        logger.info('restarting units')
+        with open(args.restartunitfile,'r') as f:
+            for unit in f:
+                unit = unit.rstrip()
+                logger.debug('restarting unit %s'%unit)
+                restartunit(unit)
+                time.sleep(waittime)
+        memberids = newmemberids
 
     # sleep for a bit
     sleeptime = waittime+(waittime*random.uniform(-1*args.waitrand,args.waitrand))
