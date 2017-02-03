@@ -332,6 +332,6 @@ while True:
         memberids = newmemberids
 
     # sleep for a bit
-    sleeptime = waittime+(waittime*random.uniform(-1*args.waitrand,args.waitrand))
+    sleeptime = max(1,waittime+(waittime*random.uniform(-1*args.waitrand,args.waitrand)))
     logger.debug('sleeping for %f seconds'%sleeptime)
     time.sleep(sleeptime)
