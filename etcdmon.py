@@ -78,7 +78,10 @@ def restartetcd():
     restartunit('etcd2.service')
 
 def restartunit(unit):
-    _getsystemd().RestartUnit(unit, 'replace')
+    try:
+        _getsystemd().RestartUnit(unit, 'replace')
+    except dbus.exceptions.DBusException as e:
+        logger.warning('Exception restarting unit: %s'%e)
 
 def getasmsg(queue, msgfilterfunc=lambda body: 'LifecycleTransition' in body):
     msgs = getmsgs(queue)
