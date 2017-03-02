@@ -70,15 +70,16 @@ def writeetcdconf(path, initclusterstate, cluster):
         logger.debug('writing etcd initial config to %s'%path)
         conffile.write(unitstr)
 
-    logger.debug('reloading systemd')
+    logger.info('reloading systemd')
     _getsystemd().Reload()
 
 def restartetcd():
-    logger.debug('restarting etcd2')
+    logger.info('restarting etcd2')
     restartunit('etcd2.service')
 
 def restartunit(unit):
     try:
+        logger.info('restarting %s'%unit)
         _getsystemd().RestartUnit(unit, 'replace')
     except dbus.exceptions.DBusException as e:
         logger.warning('Exception restarting unit: %s'%e)
@@ -252,10 +253,10 @@ def main():
         etcdclient.leader
     except etcd.EtcdException:
         # could not connect to etcd, do init thing
-        logger.debug('initial connect to etcd failed, likely unconfigured')
+        logger.info('initial connect to etcd failed, likely unconfigured')
 
         if not getleadermutex(etcdqueue):
-            logger.debug('did not get leadership, getting peer list')
+            logger.info('did not get leadership, getting peer list')
             peers = getetcdpeersmsg(etcdqueue)
 
             # wait until we have peers
@@ -264,10 +265,10 @@ def main():
                 time.sleep(max(1,1+random.uniform(-1*args.waitrand,args.waitrand)))
                 peers = getetcdpeersmsg(etcdqueue)
 
-            logger.debug('got list of peers (%s), initialising'%peers.keys())
+            logger.info('got list of peers (%s), initialising'%peers.keys())
             writeetcdconf(args.etcdconfpath, 2 , peers)
         else:
-            logger.debug('initialising etcd config as single member/leader')
+            logger.info('initialising etcd config as single member/leader')
             writeetcdconf(args.etcdconfpath, 1 , {os.environ['COREOS_EC2_INSTANCE_ID']:"http://%s:2380"%os.environ['COREOS_EC2_IPV4_LOCAL']})
         # start etcd
         restartetcd()
@@ -374,7 +375,7 @@ def main():
                 memberids = newmemberids
 
         except etcd.EtcdException:
-            logger.debug('could not connect to etcd, sleeping')
+            logger.info('could not connect to etcd, sleeping')
             # sleep for a bit
         sleeptime = max(1,args.waittime+(args.waittime*random.uniform(-1*args.waitrand,args.waitrand)))
         logger.debug('sleeping for %f seconds'%sleeptime)
