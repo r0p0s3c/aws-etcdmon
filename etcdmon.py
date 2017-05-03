@@ -39,10 +39,10 @@ def as_enum(d):
 
 def change_logging(signum,frame):
     logger.info("received signal: %s at frame: %s"%(signum,frame))
-    if signum == signal.SIGUSR1
+    if signum == signal.SIGUSR1:
         logger.setLevel(logging.DEBUG)
         logger.info('logging set to DEBUG')
-    elif signum == signal.SIGUSR2
+    elif signum == signal.SIGUSR2:
         logger.setLevel(logging.INFO)
         logger.info('logging set to INFO')
     else:
