@@ -12,6 +12,7 @@ import dbus
 import logging
 import boto3
 from enum import Enum
+import signal
 
 # set up logger and args as globals so everyone can use it
 # we do things this way so modules/libraries we use don't log at our level, whatever it is
@@ -36,6 +37,16 @@ def as_enum(d):
     else:
         return d
 
+def change_logging(signum,frame):
+    logger.info("received signal: %s at frame: %s"%(signum,frame))
+    if signum == signal.SIGUSR1
+        logger.setLevel(logging.DEBUG)
+        logger.info('logging set to DEBUG')
+    elif signum == signal.SIGUSR2
+        logger.setLevel(logging.INFO)
+        logger.info('logging set to INFO')
+    else:
+        logger.warning('unhandled signal')
 
 
 def _getsystemd():
@@ -160,7 +171,7 @@ def getetcdpeersmsg(queue):
             peers = plist
             msg.delete()
         else:
-            logger.debug('etdc peer msg doesn\'t contain our machineid, not for us')
+            logger.debug('etcd peer msg doesn\'t contain our machineid, not for us')
     return peers
 
 
@@ -225,6 +236,9 @@ def main():
         logger.debug('REGION=%s ASQUEUEURL=%s ETCDQUEUEURL=%s'%(args.region,args.asqueueurl,args.etcdqueueurl))
     else:
         logger.info('logging at level INFO')
+
+    signal.signal(signal.SIGUSR1,change_logging)
+    signal.signal(signal.SIGUSR2,change_logging)
 
 # initclusterstate: 0 == no init required, 1 == new, 2 == existing
     initclusterstate = 0
